@@ -18,6 +18,12 @@ data/legal_docs/*
 data/vectorstore/
 data/qdrant/        # Qdrant storage (docker compose)
 
+# Cache prompt pull từ LangSmith (Bài 6) — sinh lúc runtime, không commit
+data/prompt_cache/
+
+# State của diễn tập rollback local (scripts/cicd_demo.py) — sinh lúc chạy
+data/cicd_demo/
+
 # Training output (Buổi 3) — checkpoint/adapter nặng, không commit
 training/output/
 

@@ -7,7 +7,7 @@
 ### 1. Bootstrap hạ tầng
 
 ```bash
-export PROJECT_ID=my-gcp-project
+export PROJECT_ID=llm-engineer-demo
 ./deploy/deploy.sh
 ```
 
@@ -197,17 +197,41 @@ curl -s https://<domain>/health     # → vẫn sống, vẫn là bản tốt
 
 ## Dọn dẹp sau buổi
 
-```bash
-# Dừng VM (IP tĩnh vẫn tính phí nhàn rỗi ~$0.004/h)
-gcloud compute instances stop llm-app-vm --zone=asia-southeast1-b
+**Chỉ dừng, giữ hạ tầng cho buổi sau** — IP tĩnh vẫn tính phí nhàn rỗi
+~$0.004/h:
 
-# Xoá hẳn nếu không dùng nữa
-gcloud compute instances delete llm-app-vm --zone=asia-southeast1-b
-gcloud compute addresses delete llm-app-ip --region=asia-southeast1
+```bash
+gcloud compute instances stop llm-app-vm --zone=asia-southeast1-b
 ```
 
-Xoá `VM_SSH_KEY` khỏi GitHub Secrets nếu không dùng lại, và thu hồi key trên VM
-khi khoá học kết thúc:
+**Xoá sạch để dựng lại từ đầu:**
+
+```bash
+PROJECT_ID=llm-engineer-demo ./deploy/teardown.sh
+```
+
+Script xoá VM, IP tĩnh, 3 secret, service account, firewall và SSH key local —
+theo đúng thứ tự ngược lúc dựng, nên chạy lại lần hai cũng không lỗi. Ba thứ
+phải xoá tay, script in ra ở cuối:
+
+1. GitHub → Settings → Secrets and variables → Actions: `VM_SSH_KEY`, `VM_HOST`,
+   `VM_USER`, `APP_URL`. **Đừng bỏ qua bước này** — `VM_HOST` còn trỏ vào IP đã
+   giải phóng thì lần dựng sau pipeline đỏ ở bước `ssh` với lỗi timeout.
+2. Package `llm-engineer-demo` trên ghcr.io (tuỳ chọn).
+3. Trace trong project `llm-engineer-demo` trên LangSmith (tuỳ chọn).
+
+Giữ lại key local để đỡ phải cập nhật `VM_SSH_KEY` trên GitHub:
+
+```bash
+KEEP_SSH_KEY=true PROJECT_ID=llm-engineer-demo ./deploy/teardown.sh
+```
+
+> ⚠ **Let's Encrypt giới hạn 5 chứng chỉ trùng nhau mỗi tuần.** Domain là
+> `<IP>.sslip.io`, nên teardown rồi dựng lại giữ nguyên IP tĩnh là xin lại đúng
+> tên miền đó — lần thứ 6 trong tuần, bước 7 của `deploy.sh` đỏ. `teardown.sh`
+> xoá luôn IP tĩnh nên lần sau sẽ lấy IP mới và không dính giới hạn.
+
+Nếu giữ VM mà muốn thu hồi quyền SSH của CI khi khoá học kết thúc:
 
 ```bash
 gcloud compute instances remove-metadata llm-app-vm --keys=ssh-keys

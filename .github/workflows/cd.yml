@@ -1,0 +1,195 @@
+name: cd
+
+# Module III, Bài 6, Section 4 (Deployment Strategies) + Bài 5 (Cloud Deployment).
+#
+# Nguyên tắc của bài, và cách file này thực hiện:
+#
+#   1. "Chỉ deploy khi CI xanh."  → workflow_run trên ci.yml, không phải push.
+#      `on: push` sẽ deploy cả những commit chưa qua test.
+#
+#   2. "Không dùng key file."     → Workload Identity Federation. GitHub xin
+#      một OIDC token, GCP đổi lấy access token tạm. Không có JSON key nào
+#      trong repo, trong Secrets, hay trên runner — nên không có gì để rò.
+#
+#   3. "Image bất biến, tag = git SHA." → deploy = trỏ tag, rollback = trỏ
+#      ngược lại. Không bao giờ deploy tag `latest` từ registry.
+#
+#   4. "Promote theo smoke test, không theo trạng thái container." → bước smoke
+#      chạy trong chính container vừa deploy, hỏi 1 câu đã biết đáp án.
+#
+#   5. "Rollback tự động."        → `if: failure()` gọi release.sh rollback về
+#      last-known-good trên VM, rồi smoke lại để xác nhận đã hồi.
+#
+# Cần cấu hình trước (xem deploy/README.md):
+#   vars:    GCP_PROJECT_ID, GCP_REGION, ARTIFACT_REPO, VM_NAME, VM_ZONE, APP_URL
+#   secrets: WIF_PROVIDER, DEPLOY_SA
+#   GitHub Environment "production" (bật required reviewers nếu muốn duyệt tay).
+#
+# ── MẶC ĐỊNH TẮT ───────────────────────────────────────────────────────────────
+#
+# Repo có HAI workflow deploy: file này (WIF + Artifact Registry) và deploy.yml
+# (SSH key + ghcr.io). Cả hai đều treo trên `workflow_run` của ci.yml, nên nếu
+# bật cả hai thì mỗi push sẽ deploy HAI LẦN lên cùng một VM — hai tiến trình
+# giành nhau đổi tag `latest` và restart service.
+#
+# Nên file này chỉ chạy khi biến `ENABLE_WIF_DEPLOY` được đặt bằng 'true'
+# (Settings → Secrets and variables → Actions → Variables). Muốn dùng đường
+# production này thì đặt biến đó VÀ tắt deploy.yml.
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: # deploy tay khi cần (rollback khẩn cấp, hotfix)
+
+concurrency:
+  # KHÔNG cancel-in-progress: huỷ giữa lúc deploy có thể để lại VM ở trạng thái
+  # nửa vời (image mới đã pull, service chưa restart). Deploy xếp hàng, không đè.
+  group: cd-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # bắt buộc cho Workload Identity Federation (OIDC)
+
+env:
+  IMAGE_NAME: llm-engineer-demo
+
+jobs:
+  deploy:
+    # Chỉ chạy khi CI đã xanh (hoặc khi kích hoạt tay), VÀ khi đường WIF được
+    # bật tường minh — xem "MẶC ĐỊNH TẮT" ở đầu file.
+    if: >
+      vars.ENABLE_WIF_DEPLOY == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    # Gắn environment để có approval gate + lịch sử deploy trên GitHub UI.
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # workflow_run chạy trên commit MỚI NHẤT của default branch, không
+          # phải commit đã qua CI. Phải checkout đúng SHA mà CI đã test, nếu
+          # không ta deploy một commit chưa hề được kiểm.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      # ── Auth: OIDC → access token tạm, không key file ──────────────────────
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Cấu hình Docker cho Artifact Registry
+        run: gcloud auth configure-docker "${{ vars.GCP_REGION }}-docker.pkg.dev" --quiet
+
+      # ── Build & push, tag = git SHA ────────────────────────────────────────
+      - name: Xác định SHA và đường dẫn image
+        id: build
+        env:
+          REGISTRY: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.ARTIFACT_REPO }}
+        run: |
+          # Lấy SHA từ commit ĐÃ CHECKOUT (workflow_run.head_sha), không phải
+          # github.sha — hai giá trị này khác nhau khi có commit mới hơn lên main.
+          SHA="$(git rev-parse HEAD)"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "image_uri=${REGISTRY}/${IMAGE_NAME}:${SHA}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build và push image (tag = git SHA)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          # Tag theo SHA, KHÔNG bao giờ push tag `latest` lên registry: `latest`
+          # là con trỏ có thể đổi, mà rollback cần một đích bất biến.
+          tags: ${{ steps.build.outputs.image_uri }}
+          # Cache trong registry: requirements.txt ít đổi nên layer cài
+          # dependency tái dùng được giữa các lần chạy.
+          cache-from: type=registry,ref=${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+
+      # ── Deploy lên VM ──────────────────────────────────────────────────────
+      - name: Copy script release lên VM
+        run: |
+          gcloud compute scp deploy/release.sh deploy/smoke.py \
+            "${{ vars.VM_NAME }}:/tmp/" \
+            --zone="${{ vars.VM_ZONE }}" --project="${{ vars.GCP_PROJECT_ID }}"
+
+      - name: Deploy image lên VM
+        run: |
+          gcloud compute ssh "${{ vars.VM_NAME }}" \
+            --zone="${{ vars.VM_ZONE }}" --project="${{ vars.GCP_PROJECT_ID }}" \
+            --command="
+              sudo mkdir -p /opt/llm-app &&
+              sudo mv /tmp/release.sh /tmp/smoke.py /opt/llm-app/ &&
+              sudo chmod +x /opt/llm-app/release.sh &&
+              sudo /opt/llm-app/release.sh deploy ${{ steps.build.outputs.image_uri }}
+            "
+
+      - name: Smoke test bản vừa deploy
+        id: smoke
+        run: |
+          gcloud compute ssh "${{ vars.VM_NAME }}" \
+            --zone="${{ vars.VM_ZONE }}" --project="${{ vars.GCP_PROJECT_ID }}" \
+            --command="sudo /opt/llm-app/release.sh smoke /opt/llm-app/smoke.py"
+
+      - name: Kiểm tra qua URL công khai (nginx + TLS)
+        # Bổ sung cho smoke trong container: bắt được lỗi nginx/TLS/DNS mà bài
+        # test gọi thẳng 127.0.0.1:8000 không thấy. Không chặn promote vì lần
+        # deploy đầu tiên có thể chưa kịp có cert.
+        continue-on-error: true
+        run: |
+          echo "Kiểm tra ${{ vars.APP_URL }}/health"
+          curl -fsS --max-time 15 "${{ vars.APP_URL }}/health" && echo " OK"
+
+      # ── Rollback tự động ───────────────────────────────────────────────────
+      - name: Rollback về last-known-good
+        # if: failure() — chỉ chạy khi có bước phía trên đã đỏ. Đây là toàn bộ
+        # lý do tồn tại của .lkg trên VM: bản tốt gần nhất luôn được ghi lại
+        # TRƯỚC khi đổi tag, nên luôn có đích để quay về.
+        if: failure()
+        run: |
+          echo "::warning::Deploy thất bại — rollback về last-known-good"
+          gcloud compute ssh "${{ vars.VM_NAME }}" \
+            --zone="${{ vars.VM_ZONE }}" --project="${{ vars.GCP_PROJECT_ID }}" \
+            --command="
+              sudo /opt/llm-app/release.sh rollback &&
+              sudo /opt/llm-app/release.sh smoke /opt/llm-app/smoke.py &&
+              sudo /opt/llm-app/release.sh status
+            "
+
+      - name: Ghi kết quả vào job summary
+        if: always()
+        run: |
+          {
+            echo "## Deploy ${{ job.status }}"
+            echo ""
+            echo "- Commit: \`${{ steps.build.outputs.sha }}\`"
+            echo "- Image: \`${{ steps.build.outputs.image_uri }}\`"
+            echo "- Smoke: ${{ steps.smoke.outcome }}"
+            echo ""
+            echo "Rollback (nếu cần, chạy tay trên VM):"
+            echo '```'
+            echo "sudo /opt/llm-app/release.sh rollback"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Trục rollback thứ hai — KHÔNG cần rebuild image (Bài 6, Section 4).
+      - name: Nhắc rollback prompt (nếu bản deploy này kèm đổi prompt)
+        if: always()
+        run: |
+          {
+            echo ""
+            echo "### Rollback prompt (không cần deploy lại code)"
+            echo '```bash'
+            echo "python scripts/prompt_rollback.py --list"
+            echo "python scripts/prompt_rollback.py --previous"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

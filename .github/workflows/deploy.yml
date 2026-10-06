@@ -1,0 +1,234 @@
+name: deploy
+
+# Module III, Bài 6, Section 4 (Deployment Strategies) — bản GCE + GHCR + SSH.
+#
+# ── Vì sao có file này bên cạnh cd.yml ─────────────────────────────────────────
+#
+# cd.yml là bản PRODUCTION: Workload Identity Federation (không key file) và
+# Artifact Registry. Đúng chuẩn, nhưng để chạy được phải tạo workload identity
+# pool + provider + IAM binding + GitHub Environment trước — khoảng 30 phút, và
+# là phần dễ trượt nhất khi setup lần đầu.
+#
+# File này là bản DEMO cho lớp học, giữ nguyên MỌI bài học về CI/CD nhưng bỏ
+# hết phần hạ tầng xác thực:
+#
+#   cd.yml                              deploy.yml
+#   ──────────────────────────────      ──────────────────────────────────────
+#   WIF (OIDC → token tạm)              SSH key (1 secret duy nhất)
+#   Artifact Registry (cần auth GCP)    ghcr.io (dùng GITHUB_TOKEN có sẵn)
+#   gcloud compute ssh                  ssh thường
+#
+# Điểm mấu chốt: GitHub KHÔNG giữ credential GCP nào, và VM không cần xác thực
+# với registry (repo public thì ghcr.io pull không cần token). Chỉ cần một SSH
+# key là toàn bộ đường ống chạy.
+#
+# ── Nguyên tắc của bài, và cách file này thực hiện ─────────────────────────────
+#
+#   1. "Chỉ deploy khi CI xanh."  → workflow_run trên ci.yml, không phải push.
+#      `on: push` sẽ deploy cả những commit chưa qua test.
+#
+#   2. "Image bất biến, tag = git SHA." → deploy = trỏ tag, rollback = trỏ ngược
+#      lại. Không bao giờ deploy tag `latest` từ registry.
+#
+#   3. "Promote theo smoke test, không theo trạng thái container." → bước smoke
+#      chạy trong chính container vừa deploy, hỏi 1 câu đã biết đáp án. Container
+#      "healthy" KHÔNG có nghĩa là deploy thành công — /health trả 200 kể cả khi
+#      RAG trả rỗng.
+#
+#   4. "Rollback tự động." → `if: failure()` gọi release.sh rollback về
+#      last-known-good trên VM, rồi smoke lại để xác nhận đã hồi.
+#
+# ── Cấu hình trước (xem deploy/README.md) ─────────────────────────────────────
+#   secrets: VM_SSH_KEY
+#   vars:    VM_HOST, VM_USER, APP_URL
+#   GitHub Environment "production" (bật required reviewers nếu muốn duyệt tay)
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: # deploy tay khi cần (rollback khẩn cấp, hotfix)
+
+concurrency:
+  # KHÔNG cancel-in-progress: huỷ giữa lúc deploy có thể để lại VM ở trạng thái
+  # nửa vời (image mới đã pull, service chưa restart). Deploy xếp hàng, không đè.
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write # bắt buộc để push image lên ghcr.io
+
+env:
+  IMAGE_NAME: llm-engineer-demo
+  REGISTRY: ghcr.io
+
+jobs:
+  deploy:
+    # Chỉ chạy khi CI đã xanh (hoặc khi kích hoạt tay).
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Gắn environment để có approval gate + lịch sử deploy trên GitHub UI.
+    environment: production
+
+    env:
+      VM_USER: ${{ vars.VM_USER }}
+      VM_HOST: ${{ vars.VM_HOST }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # workflow_run chạy trên commit MỚI NHẤT của default branch, không
+          # phải commit đã qua CI. Phải checkout đúng SHA mà CI đã test, nếu
+          # không ta deploy một commit chưa hề được kiểm.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      # ── Kiểm tra cấu hình trước khi làm gì tốn thời gian ───────────────────
+      - name: Kiểm tra variables đã khai báo chưa
+        # Fail sớm với thông báo rõ ràng. Không có bước này, VM_HOST rỗng sẽ cho
+        # lỗi `ssh @: Name or service not known` — đúng nhưng vô nghĩa với người
+        # đọc log lần đầu.
+        run: |
+          missing=""
+          [ -n "$VM_HOST" ] || missing="$missing VM_HOST"
+          [ -n "$VM_USER" ] || missing="$missing VM_USER"
+          if [ -n "$missing" ]; then
+            echo "::error::Thiếu GitHub variable:$missing — xem deploy/README.md"
+            exit 1
+          fi
+          echo "VM: $VM_USER@$VM_HOST"
+
+      # ── Build & push lên GHCR, tag = git SHA ───────────────────────────────
+      - name: Xác định SHA và đường dẫn image
+        id: build
+        run: |
+          # Lấy SHA từ commit ĐÃ CHECKOUT (workflow_run.head_sha), không phải
+          # github.sha — hai giá trị này khác nhau khi có commit mới hơn lên main.
+          SHA="$(git rev-parse HEAD)"
+          # ghcr.io yêu cầu tên image VIẾT THƯỜNG; `${VAR,,}` là cú pháp bash
+          # chuyển thành chữ thường.
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "image_uri=${REGISTRY}/${GITHUB_REPOSITORY,,}:${SHA}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Đăng nhập ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          # GITHUB_TOKEN có sẵn trong mọi workflow — không phải tạo secret nào.
+          # Đây chính là lý do chọn ghcr.io thay vì Artifact Registry cho bản demo.
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build và push image (tag = git SHA)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          # Tag theo SHA, KHÔNG bao giờ push tag `latest` lên registry: `latest`
+          # là con trỏ có thể đổi, mà rollback cần một đích bất biến.
+          tags: ${{ steps.build.outputs.image_uri }}
+          # Cache trong GitHub Actions: requirements.txt ít đổi nên layer cài
+          # dependency tái dùng được giữa các lần chạy.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── Chuẩn bị SSH ───────────────────────────────────────────────────────
+      - name: Cài SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # accept-new: tin host ở lần gặp đầu, từ chối nếu key đổi về sau. Vừa
+          # tránh được prompt tương tác (làm treo CI), vừa bắt được trường hợp
+          # IP bị cấp lại cho máy khác.
+          #
+          # Ghi vào $GITHUB_ENV để các bước sau dùng chung — đường dẫn phải được
+          # expand Ở ĐÂY, vì `$SSH_OPTS` khi dùng sẽ không expand `$HOME` lồng
+          # bên trong nó lần nữa.
+          echo "SSH_OPTS=-i $HOME/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15" >> "$GITHUB_ENV"
+
+      - name: Copy script release lên VM
+        # release.sh + smoke.py nằm trên VM chứ không nằm trong image: rollback
+        # phải chạy được cả khi GitHub Actions sập — thao tác viên gõ tay
+        # `release.sh rollback` trên VM là xong.
+        run: |
+          scp $SSH_OPTS deploy/release.sh deploy/smoke.py "$VM_USER@$VM_HOST:/tmp/"
+
+      # ── Deploy lên VM ──────────────────────────────────────────────────────
+      - name: Deploy image lên VM
+        id: deploy_step
+        env:
+          IMAGE_URI: ${{ steps.build.outputs.image_uri }}
+        run: |
+          ssh $SSH_OPTS "$VM_USER@$VM_HOST" "
+            sudo mkdir -p /opt/llm-app &&
+            sudo mv /tmp/release.sh /tmp/smoke.py /opt/llm-app/ &&
+            sudo chmod +x /opt/llm-app/release.sh &&
+            sudo /opt/llm-app/release.sh deploy ${IMAGE_URI}
+          "
+
+      - name: Smoke test bản vừa deploy
+        id: smoke
+        # Bước này là toàn bộ khác biệt giữa "container chạy" và "app hoạt động".
+        # /health trả 200 kể cả khi Qdrant rỗng và /chat trả 500.
+        run: |
+          ssh $SSH_OPTS "$VM_USER@$VM_HOST" \
+            "sudo /opt/llm-app/release.sh smoke /opt/llm-app/smoke.py"
+
+      - name: Kiểm tra qua URL công khai (nginx + TLS)
+        # Bổ sung cho smoke trong container: bắt được lỗi nginx/TLS/DNS mà bài
+        # test gọi thẳng 127.0.0.1:8000 không thấy. Không chặn promote vì lần
+        # deploy đầu tiên có thể chưa kịp có cert.
+        continue-on-error: true
+        run: |
+          echo "Kiểm tra ${{ vars.APP_URL }}/health"
+          curl -fsS --max-time 15 "${{ vars.APP_URL }}/health" && echo " OK"
+
+      # ── Rollback tự động ───────────────────────────────────────────────────
+      - name: Rollback về last-known-good
+        # Chỉ chạy khi bản deploy ĐÃ lên được VM nhưng smoke thất bại. Nếu lỗi
+        # xảy ra trước đó (build đỏ, SSH không vào được) thì trên VM chưa có gì
+        # thay đổi — rollback vừa vô nghĩa vừa có thể ghi đè bản đang chạy tốt.
+        if: failure() && steps.deploy_step.outcome == 'success'
+        run: |
+          echo "::warning::Deploy thất bại — rollback về last-known-good"
+          ssh $SSH_OPTS "$VM_USER@$VM_HOST" "
+            sudo /opt/llm-app/release.sh rollback &&
+            sudo /opt/llm-app/release.sh smoke /opt/llm-app/smoke.py &&
+            sudo /opt/llm-app/release.sh status
+          "
+
+      - name: Ghi kết quả vào job summary
+        if: always()
+        run: |
+          {
+            echo "## Deploy ${{ job.status }}"
+            echo ""
+            echo "- Commit: \`${{ steps.build.outputs.sha }}\`"
+            echo "- Image: \`${{ steps.build.outputs.image_uri }}\`"
+            echo "- Smoke: ${{ steps.smoke.outcome }}"
+            echo ""
+            echo "Rollback (nếu cần, chạy tay trên VM):"
+            echo '```'
+            echo "sudo /opt/llm-app/release.sh rollback"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Trục rollback thứ hai — KHÔNG cần rebuild image (Bài 6, Section 4).
+      - name: Nhắc rollback prompt (nếu bản deploy này kèm đổi prompt)
+        if: always()
+        run: |
+          {
+            echo ""
+            echo "### Rollback prompt (không cần deploy lại code)"
+            echo '```bash'
+            echo "python scripts/prompt_rollback.py --list"
+            echo "python scripts/prompt_rollback.py --previous"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

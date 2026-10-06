@@ -1,0 +1,68 @@
+name: ci
+
+# Module III, Bài 6, Section 4 — CI Patterns cho LLM.
+#
+# Nguyên tắc quan trọng nhất của bài: **chạy check RẺ trước, check ĐẮT sau.**
+# Prompt lint và ruff mất vài giây; pytest mất chục giây; eval gate (workflow
+# riêng) tốn tiền gọi LLM thật. Xếp sai thứ tự nghĩa là mỗi PR lỗi chính tả vẫn
+# đốt tiền API.
+#
+# Nên: job `checks` (rẻ) chạy xong mới tới job `tests` (needs:). Còn eval gate
+# tách hẳn ra eval-gate.yml và chỉ chạy khi PR đụng vào prompt/retrieval.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# PR mới đè lên PR cũ cùng nhánh → huỷ run đang chạy. Không có cái này thì 5 lần
+# push liên tiếp = 5 run chạy song song, tốn runner mà kết quả cũ đã vô nghĩa.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # CI phải HERMETIC: không gọi mạng, không cần API key, không phụ thuộc
+  # LangSmith sống hay chết. Test dùng mock; registry prompt chạy bản local.
+  PROMPT_REGISTRY: local
+  MONITORING_ENABLED: "false"
+
+jobs:
+  # ── Tầng 1: check rẻ, chạy trước ────────────────────────────────────────────
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements-dev.txt
+
+      - name: Prompt lint (metadata, version, biến template)
+        # Không cần credentials LangSmith — lint chạy trên PromptDefinition
+        # trong app/prompts/definitions.py, TRƯỚC khi push lên Hub.
+        run: python -m app.prompts.lint
+
+      - name: Ruff (F, I, B, UP)
+        run: ruff check .
+
+  # ── Tầng 2: test, chỉ chạy khi tầng 1 xanh ──────────────────────────────────
+  tests:
+    needs: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements-dev.txt
+
+      - name: Pytest
+        # Không set OPENAI_API_KEYS / LANGSMITH_API_KEY: toàn bộ suite chạy bằng
+        # mock. Nếu một test bắt đầu cần key thật, nó sẽ đỏ ở đây — đó là điều
+        # ta muốn biết (test lọt ra ngoài ranh giới hermetic).
+        run: python -m pytest tests/ -q

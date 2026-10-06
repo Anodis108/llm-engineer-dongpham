@@ -13,8 +13,12 @@ from types import SimpleNamespace
 import pytest
 
 from app.eval_pipeline import gate, scorers
-from app.eval_pipeline.dataset import GoldenCase, GoldenDataset, load_dataset, sync_dataset_to_langsmith
-
+from app.eval_pipeline.dataset import (
+    GoldenCase,
+    GoldenDataset,
+    load_dataset,
+    sync_dataset_to_langsmith,
+)
 
 # ── dataset.py: load_dataset validation ───────────────────────────────────────
 

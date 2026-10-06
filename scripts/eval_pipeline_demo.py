@@ -11,6 +11,7 @@ Chạy:
     python -m scripts.eval_pipeline_demo                      # full dataset
     python -m scripts.eval_pipeline_demo --subset 6            # 6 case đầu (nhanh, rẻ — dùng cho PR)
     python -m scripts.eval_pipeline_demo --skip-ingest         # bỏ qua bước ingest lại RAG data
+    python -m scripts.eval_pipeline_demo --subset 6 --report pr.md --json pr.json
 
 Cần OPENAI_API_KEYS (judge + RAG) và LANGSMITH_API_KEY (MONITORING_ENABLED
 không bắt buộc — script tự tạo LangSmith Client riêng cho phần eval, độc lập
@@ -20,7 +21,9 @@ với tracing production).
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+from pathlib import Path
 
 from app.eval_pipeline.dataset import load_dataset
 from app.eval_pipeline.gate import GateConfig, check_gate, summarize
@@ -48,6 +51,14 @@ def main() -> None:
     parser.add_argument(
         "--skip-ingest", action="store_true",
         help="Bỏ qua ingest lại RAG data (dùng khi Qdrant server đã có dữ liệu, không phải :memory:)",
+    )
+    parser.add_argument(
+        "--json", default=None, metavar="PATH",
+        help="Ghi kết quả dạng JSON (Bài 6: CI đọc để dựng PR comment)",
+    )
+    parser.add_argument(
+        "--report", default=None, metavar="PATH",
+        help="Ghi báo cáo Markdown (dùng làm nội dung PR comment / job summary)",
     )
     args = parser.parse_args()
 
@@ -89,7 +100,68 @@ def main() -> None:
         for failure in gate_result.failures:
             print(f"  ✗ {failure}")
 
+    # ── Đầu ra máy đọc được (Bài 6, Section 4: "CI cần output có cấu trúc") ──
+    # Eval gate chỉ hữu ích nếu kết quả tới được chỗ người quyết định: comment
+    # trên PR + job summary. Log của CI thì không ai đọc.
+    payload = _payload(dataset, results, summary, gate_result)
+
+    if args.json:
+        Path(args.json).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(f"\n[report] JSON → {args.json}")
+
+    if args.report:
+        Path(args.report).write_text(_render_markdown(payload), encoding="utf-8")
+        print(f"[report] Markdown → {args.report}")
+
     sys.exit(0 if gate_result.passed else 1)
+
+
+def _payload(dataset, results, summary, gate_result) -> dict:
+    """Kết quả eval dạng có cấu trúc — nguồn duy nhất cho JSON + Markdown."""
+    return {
+        "dataset": dataset.name,
+        "dataset_version": dataset.version,
+        "n_cases": summary.n,
+        "overall": summary.overall,
+        "rule_pass_rate": summary.rule_pass_rate,
+        "by_slice_type": dict(sorted(summary.by_slice_type.items())),
+        "gate": {
+            "passed": gate_result.passed,
+            "failures": list(gate_result.failures),
+        },
+        "langsmith_url": results.url,
+        "experiment": getattr(results, "experiment_name", ""),
+    }
+
+
+def _render_markdown(p: dict) -> str:
+    """Báo cáo cho PR comment — FAIL lên đầu để người review thấy ngay."""
+    status = "✅ PASS" if p["gate"]["passed"] else "❌ FAIL"
+    lines = [
+        f"## Eval gate: {status}",
+        "",
+        f"`{p['dataset']}` v{p['dataset_version']} — {p['n_cases']} case"
+        f" · [chi tiết trên LangSmith]({p['langsmith_url']})",
+        "",
+        "| Metric | Giá trị |",
+        "| --- | --- |",
+        f"| overall (judge) | {p['overall']} |",
+        f"| rule_pass_rate | {p['rule_pass_rate']} |",
+    ]
+    for slice_type, score in p["by_slice_type"].items():
+        lines.append(f"| slice:{slice_type} | {score} |")
+
+    if p["gate"]["failures"]:
+        lines += ["", "**Vượt tolerance so với baseline:**", ""]
+        lines += [f"- {f}" for f in p["gate"]["failures"]]
+
+    lines += [
+        "",
+        "<sub>Baseline và tolerance đặt trong `scripts/eval_pipeline_demo.py::GATES`.</sub>",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 name: eval-gate
 
-# Module III, Bài 2, Section 6 (CI Integration: Eval Gate).
+# Module III, Bài 2, Section 6 (CI Integration: Eval Gate) — nối sang Bài 6.
 #
 # Hai tầng theo bài học:
 #   - PR chạm prompts/retrieval/eval data: chạy SUBSET (rẻ, nhanh, chặn merge).
@@ -8,6 +8,10 @@ name: eval-gate
 #
 # paths: filter — bỏ qua eval nếu PR không đụng gì liên quan tới answer quality
 # (kiểm soát chi phí CI, Section 6).
+#
+# Bài 6, Section 4 bổ sung: eval gate chỉ có giá trị nếu kết quả tới được chỗ
+# người quyết định. Log CI thì không ai đọc — nên job này ghi báo cáo Markdown
+# vào PR comment + job summary, không chỉ print ra stdout.
 on:
   pull_request:
     paths:
@@ -21,6 +25,16 @@ on:
   schedule:
     - cron: "0 2 * * *" # 02:00 UTC hằng ngày — full dataset, không chặn PR
 
+# Push liên tiếp lên cùng PR: huỷ run cũ. Eval tốn tiền API — chạy 3 run song
+# song cho 3 commit cũ là đốt tiền mà không ai xem kết quả.
+concurrency:
+  group: eval-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write # cần để post/update PR comment
+
 jobs:
   eval-subset:
     if: github.event_name == 'pull_request'
@@ -28,14 +42,67 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
-      - run: pip install -r requirements.txt
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+
       - name: Run eval subset (chặn merge nếu FAIL)
+        id: eval
         env:
           OPENAI_API_KEYS: ${{ secrets.OPENAI_API_KEYS }}
           LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
           MONITORING_ENABLED: "false" # tracing production tắt trong CI — chỉ cần eval
-        run: python -m scripts.eval_pipeline_demo --subset 20
+        # --report/--json sinh output có cấu trúc cho các bước sau. Script vẫn
+        # exit 1 khi gate FAIL → step này đỏ → PR bị chặn.
+        run: |
+          python -m scripts.eval_pipeline_demo --subset 20 \
+            --report eval-report.md --json eval-report.json
+
+      - name: Ghi báo cáo vào job summary
+        # if: always() — gate FAIL thì càng phải hiện báo cáo, không thì người
+        # review chỉ thấy "step failed" mà không biết metric nào tụt.
+        if: always()
+        run: |
+          if [ -f eval-report.md ]; then
+            cat eval-report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Eval không chạy xong — không có báo cáo." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Comment kết quả lên PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync('eval-report.md')) return;
+
+            const body = fs.readFileSync('eval-report.md', 'utf8');
+            const marker = '<!-- eval-gate-report -->';
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+
+            // Cập nhật comment cũ thay vì spam comment mới mỗi lần push.
+            const comments = await github.rest.issues.listComments({ owner, repo, issue_number });
+            const existing = comments.data.find(c => c.body.includes(marker));
+
+            const payload = `${marker}\n${body}`;
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: payload });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body: payload });
+            }
+
+      - name: Lưu báo cáo làm artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: |
+            eval-report.md
+            eval-report.json
+          if-no-files-found: warn
 
   eval-full-nightly:
     if: github.event_name == 'schedule'
@@ -43,12 +110,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
-      - run: pip install -r requirements.txt
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+
       - name: Run full golden set (không chặn gì — chỉ báo cáo xu hướng)
         env:
           OPENAI_API_KEYS: ${{ secrets.OPENAI_API_KEYS }}
           LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
           MONITORING_ENABLED: "false"
-        run: python -m scripts.eval_pipeline_demo
+        run: python -m scripts.eval_pipeline_demo --report eval-report.md
         continue-on-error: true # nightly chỉ báo cáo, KHÔNG fail job (Section 6)
+
+      - name: Ghi báo cáo vào job summary
+        if: always()
+        run: |
+          if [ -f eval-report.md ]; then
+            cat eval-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi

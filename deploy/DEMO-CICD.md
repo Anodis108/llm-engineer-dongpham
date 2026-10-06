@@ -17,17 +17,17 @@ Ba secret vừa tạo còn là chuỗi `PLACEHOLDER`. Phải nạp giá trị th
 `/health` vẫn trả 200 nhưng mọi request gọi OpenAI sẽ hỏng.
 
 ```bash
-read -rs "OPENAI_KEY?OpenAI API key (sk-...): "; echo
+read -rsp "OpenAI API key (sk-...): " OPENAI_KEY; echo
 printf '%s' "$OPENAI_KEY" | gcloud secrets versions add llm-engineer-openai-api-keys \
     --project="$PROJECT_ID" --data-file=-
 unset OPENAI_KEY
 
-read -rs "TAVILY_KEY?Tavily API key (tvly-...): "; echo
+read -rsp "Tavily API key (tvly-...): " TAVILY_KEY; echo
 printf '%s' "$TAVILY_KEY" | gcloud secrets versions add llm-engineer-tavily-api-key \
     --project="$PROJECT_ID" --data-file=-
 unset TAVILY_KEY
 
-read -rs "LANGSMITH_KEY?LangSmith API key (lsv2_...): "; echo
+read -rsp "LangSmith API key (lsv2_...): " LANGSMITH_KEY; echo
 printf '%s' "$LANGSMITH_KEY" | gcloud secrets versions add llm-engineer-langsmith-api-key \
     --project="$PROJECT_ID" --data-file=-
 unset LANGSMITH_KEY

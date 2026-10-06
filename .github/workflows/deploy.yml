@@ -163,6 +163,10 @@ jobs:
       # ── Deploy lên VM ──────────────────────────────────────────────────────
       - name: Deploy image lên VM
         id: deploy_step
+        # Nếu bước này chết với `denied` khi docker pull: package trên ghcr.io
+        # vẫn đang PRIVATE. GHCR mặc định private kể cả khi repo public, mà VM
+        # thì pull ẩn danh. Vào repo → Packages → Package settings → Danger Zone
+        # → Change visibility → Public, rồi Re-run workflow này.
         env:
           IMAGE_URI: ${{ steps.build.outputs.image_uri }}
         run: |

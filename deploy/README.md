@@ -139,12 +139,32 @@ Ba nguyên tắc thể hiện trong đó:
 - **Promote theo smoke test, không theo trạng thái container.** `/health` trả 200
   kể cả khi Qdrant rỗng và `/chat` trả 500. Container "healthy" ≠ deploy thành công.
 
-## Repo private
+## Bắt buộc: đặt package trên ghcr.io thành Public
 
-VM pull image từ `ghcr.io` không cần token **chỉ khi repo public**. Nếu repo
-private, tạo một Personal Access Token (classic) với scope `read:packages`, rồi
-thêm vào `deploy.yml` một bước đăng nhập trước khi `release.sh deploy`, và lưu
-token trên VM dưới dạng secret. Với lớp học, để repo public đơn giản hơn nhiều.
+**Package trên GHCR mặc định là PRIVATE, kể cả khi repo là public.** Đây là bẫy
+hay gặp nhất khi dựng đường demo này, và triệu chứng rất dễ chẩn đoán nhầm: CI
+xanh, build + push xanh, rồi bước deploy chết với `denied` khi VM `docker pull`.
+
+VM pull ẩn danh, nên package phải public. Làm **một lần**, sau lần build đầu tiên:
+
+> GitHub → repo → **Packages** (cột phải) → chọn package `llm-engineer-demo`
+> → **Package settings** → kéo xuống **Danger Zone** → **Change visibility**
+> → **Public** → gõ tên package để xác nhận.
+
+Lần deploy đầu tiên sẽ đỏ ở bước này — đó là dự kiến, không phải lỗi cấu hình.
+Đặt public xong thì **Re-run** workflow, nó xanh.
+
+Cảnh báo của GitHub: đã chuyển public thì **không chuyển lại private được**.
+
+### Vì sao không dùng token thay vì public?
+
+Vì như vậy phải tạo một PAT dài hạn và nhét vào Secret Manager — đúng cái
+anti-pattern mà Bài 5 dạy tránh. Image public + không credential nào là lựa chọn
+vừa đơn giản hơn vừa đúng bài học hơn.
+
+Nếu buộc phải để image private: tạo PAT (classic) scope `read:packages`, lưu vào
+Secret Manager, và thêm bước `docker login ghcr.io` vào `release.sh` trước khi
+pull. Repo private cũng cần thêm bước này cho chính `deploy.yml`.
 
 ## Rollback
 
@@ -205,7 +225,8 @@ lộ qua `docker history`). Cách ở đây né cả hai:
 | `deploy.sh` chết ở bước 6 | Lỗi trên, hoặc `systemctl enable --now` khi chưa có image | Kiểm tra `nginx.conf` chỉ có block `:80` |
 | certbot fail `Could not find a virtual host` | nginx chưa reload với `server_name` đúng | Chạy lại bước 6 rồi bước 7 |
 | Smoke fail ở `check_answer` | Qdrant rỗng (app `QDRANT_URL=:memory:`) | `release.sh smoke` đã tự ingest — nếu vẫn fail, xem log container |
-| VM pull image `denied` | Repo private | Xem mục "Repo private" ở trên |
+| VM pull image `denied` | Package trên ghcr.io còn private (mặc định) | Đặt Public — xem mục "Bắt buộc: đặt package trên ghcr.io thành Public" |
+| Deploy `ssh: Permission denied` | `VM_SSH_KEY` sai hoặc key chưa vào VM metadata | `ssh -i ~/.ssh/llm-app-deploy deploy@<VM_HOST> echo OK` để tự kiểm |
 | Mỗi request chậm bất thường | `MONITORING_ENABLED=true` mà `LANGSMITH_API_KEY` còn là `PLACEHOLDER` | Nạp key thật, hoặc để `MONITORING_ENABLED=false` |
 
 ## Chi phí

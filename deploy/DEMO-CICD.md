@@ -24,8 +24,13 @@ Rồi làm 3 bước tay mà script in ra ở cuối (nạp secret thật, khai 
 
 - [ ] `curl https://<domain>/health` trả `{"status":"ok",...}`
 - [ ] Tab Actions có ít nhất một lần `ci` + `deploy` đã xanh
-- [ ] `ssh deploy@<VM_HOST> sudo /opt/llm-app/release.sh status` chạy được
-- [ ] Repo **public** (để VM pull được image từ ghcr.io)
+- [ ] **Package trên ghcr.io đã đặt Public** — mặc định nó là private kể cả khi
+      repo public, và VM pull ẩn danh sẽ bị `denied`. Xem
+      [README.md](README.md#bắt-buộc-đặt-package-trên-ghcrio-thành-public).
+      Lần deploy đầu tiên sẽ đỏ ở đây; đặt public rồi Re-run là xanh.
+- [ ] `ssh -i ~/.ssh/llm-app-deploy deploy@<VM_HOST> 'echo OK; sudo /opt/llm-app/release.sh status'`
+      chạy được — lệnh này dùng đúng key và đúng đường mà GitHub sẽ dùng, nên nó
+      chạy được nghĩa là pipeline cũng chạy được
 - [ ] Đã thử `python -m scripts.cicd_demo` ở máy bạn — màn 0 cần nó chạy được
 - [ ] Đã `git checkout .` — không còn thay đổi dở dang từ lần thử trước
 

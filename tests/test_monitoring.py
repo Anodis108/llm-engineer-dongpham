@@ -43,6 +43,9 @@ class _FakeClient:
 
 def test_trace_answer_calls_langsmith_when_enabled(monkeypatch):
     monkeypatch.setattr(tracing.settings, "monitoring_enabled", True)
+    # trace_sample_rate=1.0: các test dưới kiểm tra CƠ CHẾ GHI trace, không
+    # kiểm tra sampling. Để mặc định 5% thì test sẽ đỏ ngẫu nhiên.
+    monkeypatch.setattr(tracing.settings, "trace_sample_rate", 1.0)
 
     fake = _FakeClient()
     monkeypatch.setattr(tracing, "_get_client", lambda: fake)
@@ -63,6 +66,9 @@ def test_trace_step_nests_under_parent_run(monkeypatch):
     """trace_step tạo child run với parent_run_id đúng bằng run_id của span cha
     (lồng nhau trong LangSmith — giống app/agent/nodes.py xuyên _trace_span)."""
     monkeypatch.setattr(tracing.settings, "monitoring_enabled", True)
+    # trace_sample_rate=1.0: các test dưới kiểm tra CƠ CHẾ GHI trace, không
+    # kiểm tra sampling. Để mặc định 5% thì test sẽ đỏ ngẫu nhiên.
+    monkeypatch.setattr(tracing.settings, "trace_sample_rate", 1.0)
 
     fake = _FakeClient()
     monkeypatch.setattr(tracing, "_get_client", lambda: fake)
@@ -83,6 +89,9 @@ def test_trace_answer_reports_error_without_losing_it(monkeypatch):
     """update() gọi 2 lần khi có lỗi (set error rồi set output trong finally) —
     lần gọi sau không được xoá mất error đã ghi (bug đã sửa trong _Run.update)."""
     monkeypatch.setattr(tracing.settings, "monitoring_enabled", True)
+    # trace_sample_rate=1.0: các test dưới kiểm tra CƠ CHẾ GHI trace, không
+    # kiểm tra sampling. Để mặc định 5% thì test sẽ đỏ ngẫu nhiên.
+    monkeypatch.setattr(tracing.settings, "trace_sample_rate", 1.0)
 
     fake = _FakeClient()
     monkeypatch.setattr(tracing, "_get_client", lambda: fake)
@@ -99,6 +108,9 @@ def test_trace_answer_reports_error_without_losing_it(monkeypatch):
 
 def test_trace_stream_calls_langsmith_when_enabled(monkeypatch):
     monkeypatch.setattr(tracing.settings, "monitoring_enabled", True)
+    # trace_sample_rate=1.0: các test dưới kiểm tra CƠ CHẾ GHI trace, không
+    # kiểm tra sampling. Để mặc định 5% thì test sẽ đỏ ngẫu nhiên.
+    monkeypatch.setattr(tracing.settings, "trace_sample_rate", 1.0)
 
     fake = _FakeClient()
     monkeypatch.setattr(tracing, "_get_client", lambda: fake)

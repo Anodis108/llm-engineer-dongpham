@@ -49,29 +49,54 @@ def _rewrite_query(query: str) -> str:
     return rewritten.strip() or query
 
 
-def retrieve(query: str, top_k: int | None = None) -> list[RetrievedChunk]:
+def _hit_summary(hits) -> list[dict]:
+    """Tóm tắt hit để ghi vào trace — CHỈ source + score, không ghi cả văn bản.
+
+    Ghi cả `text` sẽ làm mỗi trace phình lên vài chục KB, tốn tiền lưu trữ mà
+    gần như không ai đọc (Bài 7, Section 4: trace ghi CÁI ĐÃ XẢY RA, không phải
+    bản sao dữ liệu). Muốn xem văn bản thì mở tài liệu gốc theo `source`.
+    """
+    return [
+        {"source": h.metadata.get("source", ""), "score": round(float(h.score), 4)}
+        for h in hits
+    ]
+
+
+def retrieve(
+    query: str, top_k: int | None = None, parent_span=None
+) -> list[RetrievedChunk]:
     """Tìm các chunk liên quan nhất tới `query`.
 
     Args:
         query: câu hỏi người dùng.
         top_k: số chunk trả về cuối cùng (mặc định settings.rag_top_k).
+        parent_span: span LangSmith để lồng các bước con vào (Bài 7). None =
+            không trace, đúng hành vi cũ. Ba span con: query_rewrite / search /
+            rerank — nhìn được bước nào ăn thời gian khi retrieval chậm.
     """
     # Import ở đây để tránh vòng import và giữ module nhẹ.
+    from app.monitoring.tracing import trace_step
     from app.retrieval import vectorstore
     from app.retrieval.embeddings import embed_query
 
     top_k = top_k or settings.rag_top_k
 
-    search_query = _rewrite_query(query) if settings.rag_query_rewriting else query
+    with trace_step(parent_span, "query_rewrite", input=query) as t:
+        search_query = _rewrite_query(query) if settings.rag_query_rewriting else query
+        t["output"] = search_query
 
     # Nếu bật rerank: lấy rộng hơn (fetch_k) rồi mới lọc xuống top_k.
     fetch_k = settings.rag_fetch_k if settings.rag_rerank_enabled else top_k
-    hits = vectorstore.search(embed_query(search_query), top_k=fetch_k)
+    with trace_step(parent_span, "search", input=search_query) as t:
+        hits = vectorstore.search(embed_query(search_query), top_k=fetch_k)
+        t["output"] = _hit_summary(hits)
 
     if settings.rag_rerank_enabled and hits:
         from app.retrieval.rerank import rerank
 
-        hits = rerank(query, hits, top_k=top_k)
+        with trace_step(parent_span, "rerank", input=len(hits)) as t:
+            hits = rerank(query, hits, top_k=top_k)
+            t["output"] = _hit_summary(hits)
 
     return [
         RetrievedChunk(

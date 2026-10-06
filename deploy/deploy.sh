@@ -221,10 +221,20 @@ cat <<EOF
                  VM_USER = deploy
                  APP_URL = https://${DOMAIN}
 
-[3] Bật HTTPS trên app (đã cấu hình sẵn ở tầng hạ tầng):
-      curl https://${DOMAIN}/health
+[3] Kiểm tra HẠ TẦNG (app chưa chạy — image do pipeline đẩy lên ở lần push đầu):
+      ssh -i ${SSH_KEY_PATH} deploy@${VM_IP} \\
+          'sudo docker --version; sudo ls /opt/llm-app/; systemctl is-active nginx'
+      curl -sI https://${DOMAIN}/ | head -1
 
- Sau đó: push một commit lên main → tab Actions → xem pipeline tự deploy.
- Repo phải là PUBLIC để VM pull được image từ ghcr.io mà không cần token.
- Nếu repo là private, xem mục "Repo private" trong deploy/README.md.
+    Lệnh curl trả 502 là ĐÚNG ở bước này, không phải lỗi: nginx đã sống và đang
+    proxy tới 127.0.0.1:8000, nhưng chưa có container nào listen ở đó.
+    /opt/llm-app/release.sh cũng CHƯA có — pipeline scp nó lên mỗi lần deploy.
+
+ Bước cuối: push một commit lên main → tab Actions → xem pipeline tự deploy.
+ Khi đó /health mới thật sự trả 200.
+
+ ⚠ Lần deploy đầu sẽ ĐỎ ở bước docker pull với `denied`: package trên ghcr.io
+   mặc định là PRIVATE kể cả khi repo public, mà VM pull ẩn danh. Vào
+   repo → Packages → Package settings → Danger Zone → Change visibility → Public,
+   rồi Re-run workflow. Chi tiết: deploy/README.md.
 EOF

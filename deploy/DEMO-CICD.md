@@ -30,7 +30,10 @@ Rồi làm 3 bước tay mà script in ra ở cuối (nạp secret thật, khai 
       Lần deploy đầu tiên sẽ đỏ ở đây; đặt public rồi Re-run là xanh.
 - [ ] `ssh -i ~/.ssh/llm-app-deploy deploy@<VM_HOST> 'echo OK; sudo /opt/llm-app/release.sh status'`
       chạy được — lệnh này dùng đúng key và đúng đường mà GitHub sẽ dùng, nên nó
-      chạy được nghĩa là pipeline cũng chạy được
+      chạy được nghĩa là pipeline cũng chạy được.
+      **Chỉ dùng được SAU lần deploy đầu** — `release.sh` do pipeline scp lên, nên
+      trước đó nó chưa tồn tại. Muốn kiểm tra kết nối TRƯỚC khi push thì dùng
+      `ssh ... 'echo OK; sudo docker --version'` — chỉ cần chữ `OK` là đủ.
 - [ ] Đã thử `python -m scripts.cicd_demo` ở máy bạn — màn 0 cần nó chạy được
 - [ ] Đã `git checkout .` — không còn thay đổi dở dang từ lần thử trước
 

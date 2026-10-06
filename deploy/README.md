@@ -113,9 +113,26 @@ printf '%s' "sk-..." | gcloud secrets versions add llm-engineer-openai-api-keys 
 #     Secrets:   VM_SSH_KEY = nội dung ~/.ssh/llm-app-deploy (copy cả 2 dòng)
 #     Variables: VM_HOST = <IP tĩnh>   VM_USER = deploy   APP_URL = https://<domain>
 
-# [3] Kiểm tra
-curl https://<domain>/health
+# [3] Kiểm tra HẠ TẦNG — app chưa chạy, image do pipeline đẩy lên ở lần push đầu
+ssh -i ~/.ssh/llm-app-deploy deploy@<VM_HOST> \
+    'sudo docker --version; sudo ls /opt/llm-app/; systemctl is-active nginx'
+curl -sI https://<domain>/ | head -1
 ```
+
+### Đọc kết quả kiểm tra cho đúng
+
+Sau bootstrap, **hai thứ trông như lỗi nhưng thực ra là đúng**:
+
+| Bạn thấy | Nghĩa là |
+|---|---|
+| `curl https://<domain>/` → **502** | nginx sống và đang proxy tới `127.0.0.1:8000`, nhưng chưa có container nào listen. Sẽ hết sau lần deploy đầu. |
+| `sudo /opt/llm-app/release.sh` → **command not found** | `release.sh` và `smoke.py` do pipeline `scp` lên **mỗi lần deploy** (để rollback chạy được cả khi workflow đổi). Bootstrap cố ý không copy. |
+
+Cái **phải** đúng ở giai đoạn này: SSH vào được, `sudo` không hỏi mật khẩu,
+`docker --version` chạy, `/opt/llm-app/.env` tồn tại, `nginx` active.
+
+`systemctl is-active llm-app` sẽ trả `inactive` — cũng đúng: service đã `enable`
+nhưng chưa `start` vì chưa có image.
 
 ## Phần B — Vòng lặp hằng ngày (mỗi push)
 

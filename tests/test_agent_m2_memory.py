@@ -14,7 +14,6 @@ from langchain_core.messages import AIMessage, HumanMessage
 from app.agent_m2 import context, memory, nodes
 from app.agent_m2 import graph as graph_mod
 
-
 # ── context.py: sliding window ────────────────────────────────────────────────
 
 def test_sliding_window_keeps_recent_and_system():

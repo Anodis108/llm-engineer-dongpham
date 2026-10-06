@@ -34,7 +34,9 @@ def rerank(query: str, hits: list[SearchHit], top_k: int) -> list[SearchHit]:
     pairs = [(query, h.text) for h in hits]
     scores = model.predict(pairs)
 
-    ranked = sorted(zip(hits, scores), key=lambda x: x[1], reverse=True)
+    # strict=True: model.predict trả đúng 1 score cho mỗi pair. Lệch số lượng
+    # nghĩa là model/input hỏng — thà raise còn hơn ghép nhầm score với hit.
+    ranked = sorted(zip(hits, scores, strict=True), key=lambda x: x[1], reverse=True)
     result: list[SearchHit] = []
     for hit, score in ranked[:top_k]:
         result.append(SearchHit(text=hit.text, score=float(score), metadata=hit.metadata))

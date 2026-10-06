@@ -72,7 +72,9 @@ def add(
             vector=vector,
             payload={"text": doc, **meta},
         )
-        for raw_id, vector, doc, meta in zip(ids, embeddings, documents, metadatas)
+        # strict=True: 4 mảng song song phải khớp độ dài. Lệch = id gắn nhầm
+        # vector, hỏng âm thầm cả index (retrieval trả rác mà không có lỗi nào).
+        for raw_id, vector, doc, meta in zip(ids, embeddings, documents, metadatas, strict=True)
     ]
     _get_client().upsert(collection_name=settings.vectorstore_collection, points=points)
 

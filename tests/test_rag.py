@@ -10,7 +10,6 @@ from app.retrieval import retriever as retriever_mod
 from app.retrieval.chunking import chunk_documents
 from app.retrieval.loader import LoadedDoc, load_documents
 
-
 # ── Chunking ─────────────────────────────────────────────────────────────────
 
 def test_chunk_short_doc_stays_single():

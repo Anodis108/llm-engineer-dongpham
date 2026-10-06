@@ -79,7 +79,9 @@ def _apply_overlap(chunks: list[str], overlap: int) -> list[str]:
     if overlap <= 0 or len(chunks) <= 1:
         return chunks
     out = [chunks[0]]
-    for prev, cur in zip(chunks, chunks[1:]):
+    # strict=False là CỐ Ý: `chunks[1:]` ngắn hơn `chunks` đúng 1 phần tử — đây
+    # là cách ghép cặp (chunk trước, chunk sau), không phải lỗi lệch độ dài.
+    for prev, cur in zip(chunks, chunks[1:], strict=False):
         tail = prev[-overlap:]
         out.append(tail + cur)
     return out

@@ -58,6 +58,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 
+from app.agent_m2.eval import evaluate_run
 from app.agent_m2.nodes import (
     agent_node,
     compact_node,
@@ -66,7 +67,6 @@ from app.agent_m2.nodes import (
     should_compact_route,
     should_continue,
 )
-from app.agent_m2.eval import evaluate_run
 from app.agent_m2.state import AssistantState
 from app.agent_m2.tools import TOOLS
 from app.monitoring.tracing import trace_answer

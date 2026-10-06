@@ -10,7 +10,6 @@ from app.eval import judge as judge_mod
 from app.eval import metrics as metrics_mod
 from app.eval import ragas_native as rn
 
-
 # ── judge.py ─────────────────────────────────────────────────────────────────
 
 def test_judge_answer_computes_overall(monkeypatch):

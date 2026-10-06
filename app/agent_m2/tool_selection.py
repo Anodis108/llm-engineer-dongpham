@@ -32,7 +32,6 @@ import math
 
 from app.agent_m2.tools import TOOL_GROUPS, TOOLS
 
-
 # ── Hierarchical Grouping (Section 2) ──────────────────────────────────────────
 
 def classify_intent(user_message: str) -> str:
@@ -106,12 +105,16 @@ async def _tool_index() -> list[tuple[str, list[float]]]:
 
     all_tools = await _all_tools()
     vectors = embed_passages([_tool_description(t) for t in all_tools])
-    _cached_tool_index = list(zip([t.name for t in all_tools], vectors))
+    # strict=True: embed_passages trả 1 vector cho mỗi tool. Lệch nghĩa là tool
+    # bị gắn nhầm vector → chọn sai tool mà không có lỗi nào lộ ra.
+    _cached_tool_index = list(zip([t.name for t in all_tools], vectors, strict=True))
     return _cached_tool_index
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
+    # strict=True: 2 embedding khác số chiều là lỗi cấu hình (đổi EMBEDDING_MODEL
+    # mà không reindex). Không có strict thì cosine vẫn "chạy" và trả điểm rác.
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(y * y for y in b))
     if norm_a == 0 or norm_b == 0:

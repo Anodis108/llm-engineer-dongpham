@@ -22,7 +22,6 @@ from app.llm.params import GenerationParams
 from app.monitoring.tracing import trace_step
 from app.retrieval.retriever import RetrievedChunk, retrieve
 
-
 # ── Guardrails (Buổi 7) ────────────────────────────────────────────────────────
 #
 # Nối cùng logic dùng trong pipeline.answer(): check_input chạy TRƯỚC graph (raise

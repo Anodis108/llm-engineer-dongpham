@@ -11,7 +11,11 @@ LangSmith cần (dict in -> dict out) và xử lý riêng case injection/out_of_
 
 from __future__ import annotations
 
-from app.eval_pipeline.dataset import GoldenDataset, default_langsmith_client, sync_dataset_to_langsmith
+from app.eval_pipeline.dataset import (
+    GoldenDataset,
+    default_langsmith_client,
+    sync_dataset_to_langsmith,
+)
 from app.eval_pipeline.scorers import DEFAULT_EVALUATORS
 from app.guardrails.checks import GuardrailViolation
 

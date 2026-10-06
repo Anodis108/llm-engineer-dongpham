@@ -45,9 +45,16 @@ pyyaml>=6.0                      # đọc golden set (data/eval/legal_qa/v1.yaml
 numpy>=1.24.0
 # pyyaml đã có ở trên (đọc data/cost/replay_questions.yaml).
 
+# ─── Module III, Bài 4: Containerisation & LLM Serving ───────────────────────
+redis>=5.0.0                     # RedisStore (app/cost/cache_redis.py) — cache tầng 1 dùng chung nhiều instance
+
+# ─── Module III, Bài 5: Cloud Deployment ─────────────────────────────────────
+google-cloud-secret-manager>=2.20.0   # app/config.py đọc secret lúc runtime (fallback .env cho local)
+
 # ─── Dev / test ──────────────────────────────────────────────────────────────
-pytest>=8.2.0
-pytest-asyncio>=0.23.0
+# KHÔNG nằm ở đây nữa: pytest/pytest-asyncio/ruff đã chuyển sang
+# requirements-dev.txt (Bài 6) để Docker image không cài công cụ test.
+# CI và máy dev dùng: pip install -r requirements-dev.txt
 
 # ─── Các buổi sau sẽ bổ sung (giữ comment để thấy lộ trình) ───────────────────
 # Buổi 9 (Capstone):

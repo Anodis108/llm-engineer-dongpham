@@ -20,7 +20,6 @@ from pydantic import BaseModel, Field
 from app.llm import completion
 from app.llm.params import GenerationParams
 
-
 # ── Faithfulness ──────────────────────────────────────────────────────────────
 
 class _Claims(BaseModel):

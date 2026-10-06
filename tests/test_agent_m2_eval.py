@@ -17,7 +17,6 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from app.agent_m2 import eval as agent_eval
 from app.agent_m2 import graph as graph_mod
 
-
 # ── eval.py: evaluate_task_success / evaluate_trajectory ────────────────────
 
 def test_evaluate_task_success_calls_chat_parsed(monkeypatch):

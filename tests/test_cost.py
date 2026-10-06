@@ -11,7 +11,6 @@ Không gọi API thật. Kiểm tra 4 mảng:
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -20,7 +19,6 @@ from app.cost import budget, cascade
 from app.cost.cache_exact import ExactCache, InMemoryStore, cache_key
 from app.cost.tracker import CostTracker, breakdown_pct, breakdown_tokens, cost_of
 from app.optimization.caching import SemanticCache, is_volatile
-
 
 # ── tracker.py ─────────────────────────────────────────────────────────────
 

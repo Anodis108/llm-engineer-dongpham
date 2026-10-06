@@ -13,8 +13,6 @@ compress là tác vụ text→text thuần, không cần tool binding, nên gi�
 
 from __future__ import annotations
 
-from langchain_core.messages import BaseMessage
-
 from app.llm import completion
 from app.llm.params import GenerationParams
 

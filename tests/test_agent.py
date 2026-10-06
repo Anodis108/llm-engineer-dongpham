@@ -9,7 +9,6 @@ from __future__ import annotations
 from app.agent import nodes
 from app.retrieval.retriever import RetrievedChunk
 
-
 # ── decompose_query ───────────────────────────────────────────────────────────
 
 def test_decompose_skips_short_question(monkeypatch):

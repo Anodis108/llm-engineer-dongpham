@@ -7,7 +7,7 @@ dưới ngưỡng (xem "Evaluation Checklist" cuối bài học).
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 from app.eval.judge import JudgeScore, judge_answer
 from app.eval.ragas_native import evaluate_rag

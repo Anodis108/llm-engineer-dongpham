@@ -63,11 +63,11 @@ def run_config(config: str, questions: list[dict]) -> ReplayResult:
     """1 lần chạy toàn bộ replay dưới 1 cấu hình cache. Mỗi lần chạy dùng
     CostTracker RIÊNG (không dùng chung tracker.py:tracker toàn cục) để 4 lần
     chạy không cộng dồn chi phí lẫn nhau khi --compare."""
-    from app.prompts.templates import build_messages
+    from app.guardrails.checks import check_input, check_output
     from app.llm import completion
     from app.llm.params import GenerationParams
+    from app.prompts.templates import build_messages
     from app.retrieval.retriever import retrieve
-    from app.guardrails.checks import check_input, check_output
 
     local_tracker = CostTracker()
     exact_cache = ExactCache() if config in ("exact", "exact+semantic") else None

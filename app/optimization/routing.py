@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import numpy as np
 
-
 # ── 1. Rule-based Routing ──────────────────────────────────────────────────────
 
 

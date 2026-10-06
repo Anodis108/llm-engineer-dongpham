@@ -54,7 +54,7 @@ class GoldenDataset:
     def slice_types(self) -> set[str]:
         return {c.slice.get("type", "unknown") for c in self.cases}
 
-    def select_subset(self, n: int) -> "GoldenDataset":
+    def select_subset(self, n: int) -> GoldenDataset:
         """Section 6: subset cho eval gate trên PR — "ưu tiên slice rủi ro",
         KHÔNG cắt cơ học N case đầu (nguy hiểm: nếu YAML liệt kê hết lookup
         trước rồi mới tới injection/out_of_scope như v1.yaml hiện có, cắt đầu

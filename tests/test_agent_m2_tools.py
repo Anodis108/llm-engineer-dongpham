@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from app.agent_m2 import tool_selection, tools
 
-
 # ── tools.py: error handling (Section 1) — không raise, trả lỗi dạng text ────
 
 def test_check_calendar_returns_error_text_on_bad_date():

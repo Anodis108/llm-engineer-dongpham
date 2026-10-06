@@ -14,3 +14,13 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+# E501 (dòng quá dài) TẮT có chủ đích. Repo này giải thích kiến trúc bằng comment
+# tiếng Việt ngay cạnh code (Bài 6, Section 4: "code là tài liệu"), mà tiếng Việt
+# có dấu + câu dài tự nhiên vượt 100 ký tự. Bắt xuống dòng sẽ biến comment thành
+# cột hẹp khó đọc mà không bắt thêm được lỗi nào — E501 không phải là bug.
+#
+# Các rule CÒN LẠI vẫn bật và CHẶN ở CI: F (biến/import không dùng, lỗi thật),
+# I (thứ tự import), B (bugbear — gồm B905 zip thiếu strict), UP (pyupgrade).
+# Xem .github/workflows/ci.yml.
+ignore = ["E501"]

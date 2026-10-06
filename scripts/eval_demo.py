@@ -37,7 +37,8 @@ def main() -> None:
 
     results = evaluate_dataset(samples)
 
-    for s, r in zip(samples, results):
+    # strict=True: bỏ sót sample nào là điểm eval sai — phải raise, không im lặng.
+    for s, r in zip(samples, results, strict=True):
         d = r.as_dict()
         print(f"Q: {s['question']}")
         print(f"A: {s['answer']}")

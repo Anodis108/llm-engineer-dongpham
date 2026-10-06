@@ -13,7 +13,6 @@ from app.guardrails import checks
 from app.guardrails.injection import detect_prompt_injection, wrap_safe_prompt
 from app.guardrails.pii import detect_pii, redact_pii
 
-
 # ── Injection regex ───────────────────────────────────────────────────────────
 
 def test_detect_injection_english():

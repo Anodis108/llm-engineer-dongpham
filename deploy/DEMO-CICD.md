@@ -1,7 +1,7 @@
 # CI/CD trên Google Compute Engine
 
 ---
-
+===
 ## Chuẩn bị
 
 ### 1. Bootstrap hạ tầng

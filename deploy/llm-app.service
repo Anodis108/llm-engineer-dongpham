@@ -1,0 +1,34 @@
+# Module III, Bài 5, Section 2 — systemd unit quản lý container app.
+#
+# Vì sao systemd thay vì `docker run` tay + nohup? `Restart=always` tự khởi
+# động lại container khi crash (OOM, lỗi runtime...) mà không cần cron/watchdog
+# riêng; `systemctl status/journalctl` cho logging + healthcheck thống nhất với
+# phần còn lại của VM.
+#
+# Cài đặt: copy file này vào /etc/systemd/system/llm-app.service (deploy.sh làm
+# việc này tự động), rồi:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now llm-app
+
+[Unit]
+Description=LLM Engineer Demo — FastAPI app (Docker container)
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+
+# Container bind ra 127.0.0.1 CHỨ KHÔNG 0.0.0.0:8000 ra ngoài — nginx (Section 3)
+# là điểm vào DUY NHẤT public trên 80/443 (Section 5: firewall chỉ mở 80/443).
+ExecStartPre=-/usr/bin/docker rm -f llm-app
+ExecStart=/usr/bin/docker run --rm --name llm-app \
+    --env-file /opt/llm-app/.env \
+    -p 127.0.0.1:8000:8000 \
+    llm-engineer-demo:latest
+ExecStop=/usr/bin/docker stop llm-app
+
+[Install]
+WantedBy=multi-user.target

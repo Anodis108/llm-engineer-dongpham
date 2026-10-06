@@ -1,10 +1,12 @@
-# Qdrant vector database cho RAG (Buổi 5).
+# Qdrant (Buổi 5) + Redis (Module III, Bài 4) + app (tuỳ chọn) + vLLM (tuỳ chọn, cần GPU).
 #
-#   docker compose up -d        # khởi động Qdrant nền
-#   docker compose down         # dừng
+#   docker compose up -d                  # Qdrant + Redis + app
+#   docker compose --profile vllm up -d   # + vLLM (cần GPU, xem service bên dưới)
+#   docker compose down
 #
-# Sau khi chạy, đặt trong .env:  QDRANT_URL=http://localhost:6333
-# Dashboard: http://localhost:6333/dashboard
+# Sau khi chạy, đặt trong .env:
+#   QDRANT_URL=http://localhost:6333   (dashboard: http://localhost:6333/dashboard)
+#   REDIS_URL=redis://localhost:6379
 services:
   qdrant:
     image: qdrant/qdrant:latest
@@ -14,4 +16,64 @@ services:
       - "6334:6334"   # gRPC
     volumes:
       - ./data/qdrant:/qdrant/storage   # persist dữ liệu qua các lần restart
+    restart: unless-stopped
+
+  # Module III, Bài 3 nói rõ: ExactCache tách interface qua CacheStore protocol
+  # (InMemoryStore chỉ demo, không chia sẻ giữa nhiều process). Bài 4 thêm Redis
+  # thật — RedisStore trong app/cost/cache_redis.py implement đúng 2 method
+  # (get/setex), KHÔNG đổi gì ở ExactCache/logic cache.
+  redis:
+    image: redis:7-alpine
+    container_name: legal-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    restart: unless-stopped
+
+  # App image (Section 1: multi-stage Dockerfile). Chạy song song Qdrant/Redis
+  # để test full stack local giống production — KHÔNG bắt buộc cho dev hàng
+  # ngày (uvicorn --reload chạy trực tiếp nhanh hơn để iterate).
+  app:
+    build: .
+    container_name: legal-app
+    ports:
+      - "8000:8000"
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      REDIS_URL: redis://redis:6379
+    env_file:
+      - .env
+    depends_on:
+      - qdrant
+      - redis
+    restart: unless-stopped
+
+  # Section 2-3 (LLM Serving nâng cao, tuỳ chọn): vLLM server local thay OpenAI
+  # Cloud. Cần GPU + image lớn (không tải mặc định) -> đặt sau 1 profile riêng,
+  # KHÔNG chạy khi gõ `docker compose up` trơn.
+  #
+  #   docker compose --profile vllm up -d vllm
+  #   .env: LLM_BACKEND=vllm, LLM_BASE_URL=http://localhost:8001/v1
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: legal-vllm
+    profiles: ["vllm"]
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./data/models:/root/.cache/huggingface   # cache weight tải về, KHÔNG bake vào image
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command:
+      - --model
+      - Qwen/Qwen2.5-3B-Instruct
+      - --max-model-len
+      - "4096"
     restart: unless-stopped

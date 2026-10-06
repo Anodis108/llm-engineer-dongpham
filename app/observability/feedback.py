@@ -34,10 +34,14 @@ from enum import Enum
 from app.config import settings
 
 
-# (str, Enum) chứ không phải StrEnum: StrEnum chỉ có từ Python 3.11, mà môi
-# trường dev của lớp đang chạy 3.10. Hành vi dùng ở đây giống hệt nhau — giá
-# trị enum vẫn so sánh được với chuỗi.
-class Signal(str, Enum):
+# (str, Enum) chứ không phải StrEnum, dù pyproject khai requires-python >=3.11:
+# env conda của lớp (`llm-engineer`) chạy 3.10, mà StrEnum chỉ có từ 3.11. Đây là
+# chỗ DUY NHẤT trong repo cần noqa: UP042.
+#
+# (str, Enum) hợp lệ ở mọi phiên bản Python và hành vi dùng ở đây giống hệt
+# StrEnum — giá trị enum vẫn so sánh được với chuỗi. Nếu nâng env dev lên 3.11
+# thì đổi sang StrEnum và xoá dòng noqa này.
+class Signal(str, Enum):  # noqa: UP042
     """Các tín hiệu thu được. Giá trị dùng luôn làm khoá trên dashboard."""
 
     THUMBS_UP = "thumbs_up"

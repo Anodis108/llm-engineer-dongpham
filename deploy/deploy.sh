@@ -145,6 +145,7 @@ gcloud compute ssh "$VM_NAME" --zone="$ZONE" --project="$PROJECT_ID" --command="
     sudo mkdir -p /opt/llm-app &&
     sudo mv /tmp/llm-app.env /opt/llm-app/.env &&
     sudo chmod 600 /opt/llm-app/.env &&
+    sudo chown root:root /opt/llm-app/.env &&
     sudo mv /tmp/llm-app.service /etc/systemd/system/llm-app.service &&
     sudo mkdir -p /etc/nginx/sites-available &&
     sudo mv /tmp/nginx-llm-app.conf /etc/nginx/sites-available/llm-app &&

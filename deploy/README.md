@@ -96,7 +96,9 @@ export PROJECT_ID=my-gcp-project
    chưa có image nào trên máy, bản deploy đầu tiên do pipeline đẩy lên.
 7. **HTTPS qua certbot** — chạy được vì bước 6 đã để nginx phục vụ HTTP với đúng
    `server_name`, còn DNS thì `sslip.io` resolve sẵn. certbot tự nhân bản block
-   `listen 80` sang `listen 443 ssl` kèm chứng chỉ.
+   `listen 80` sang `listen 443 ssl` kèm chứng chỉ. Gói `certbot` của Debian cài
+   kèm `certbot.timer` nên gia hạn tự động — không cần cron tay. Kiểm tra bằng
+   `systemctl list-timers certbot`.
 8. **SSH key cho GitHub Actions** — sinh keypair riêng cho CI (không dùng lại key
    cá nhân của bạn), thêm public key vào VM metadata dưới user `deploy`. Đọc key
    cũ ra trước khi ghi để không tự khoá mình khỏi VM.

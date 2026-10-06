@@ -17,6 +17,8 @@ và chặn merge trên CI khi có regression.
 |------|--------|------------------|
 | **2** | **LLM Evaluation Pipelines** | `eval_pipeline/` — **golden dataset trên LangSmith, rule + judge scorer, regression gate** |
 | **3** | **Cost Optimization & Caching** | `cost/` — **token economics, exact/semantic cache 2 tầng, cascading, budget governance** |
+| **4** | **Containerisation & LLM Serving** | `Dockerfile`, `docker-compose.yml`, `app/llm/async_client.py` — **multi-stage build, RedisStore, async serving (semaphore/backpressure/SSE)** |
+| **5** | **Cloud Deployment** | `deploy/` — **Compute Engine + nginx + systemd + Secret Manager runbook** |
 
 ### Buổi 2 — LLM Evaluation Pipelines
 
@@ -202,6 +204,138 @@ python -m scripts.cost_replay_demo --compare                # chạy cả 4, in 
 > (Section 4, mermaid tóm tắt bài học) là **tầng 1 → tầng 2 → gọi LLM**, tầng 1
 > rẻ hơn (hash lookup, không cần embed) và chính xác 100%.
 
+### Buổi 4 — Containerisation & LLM Serving
+
+Đưa app đã có (Module I/II + Bài 2-3) vào Docker đúng chuẩn production, và
+nâng cấp serving từ sync (`/chat/stream`, Bài 1) lên async có backpressure —
+2 việc tách biệt, không đổi logic RAG/agent đã xây.
+
+**Multi-stage Docker build (Section 1)** — [`Dockerfile`](../Dockerfile):
+stage `builder` cài dependency (cần compiler cho một số package native), stage
+`runtime` chỉ copy package đã cài + code, chạy bằng **non-root user**, có
+`HEALTHCHECK` gọi thẳng `/health` (không cần thêm `curl`). Layer xếp theo tần
+suất đổi — `requirements.txt` copy TRƯỚC `app/`, sửa code không phải cài lại
+dependency. [`.dockerignore`](../.dockerignore) loại `.git`, `tests/`,
+`training/`, notebook.
+
+> **Model weights KHÔNG nằm trong image.** App chỉ gọi API (OpenAI Cloud/Ollama/
+> vLLM qua `base_url`) — không có gì để bake vào image. Nếu sau này serve
+> model local trong container, mount weight qua volume (xem service `vllm`
+> dưới) chứ không `COPY` vào layer build.
+
+```bash
+docker build -t llm-engineer-demo:latest .
+docker compose up -d              # Qdrant + Redis + app
+docker compose --profile vllm up  # + vLLM local (tuỳ chọn, cần GPU)
+```
+
+**LLM Serving nâng cao (Section 2-3)** — [`docker-compose.yml`](../docker-compose.yml)
+thêm service `vllm` (profile riêng, không chạy mặc định vì cần GPU + image
+nặng) minh hoạ 2 khái niệm bài học: **PagedAttention** (KV cache quản lý như
+phân trang bộ nhớ ảo OS, ~96% tận dụng bộ nhớ so với ~20-40% cách naive) và
+**continuous batching** (lập lịch ở mức iteration, request xong nhường slot
+ngay — khác static batching phải đợi cả batch xong).
+
+**Redis cache tầng 1 (Section 1, nối Bài 3)** — [`app/cost/cache_redis.py`](../app/cost/cache_redis.py):
+`RedisStore` implement đúng `CacheStore` protocol (`get`/`setex`) đã tách sẵn
+từ Bài 3 — `ExactCache` KHÔNG đổi gì khi chuyển từ `InMemoryStore` (demo, 1
+process) sang Redis thật (chia sẻ giữa nhiều container/replica). Đây chính là
+giá trị của việc tách interface từ đầu thay vì viết cứng vào 1 backend.
+
+**FastAPI Patterns cho LLM (Section 4)** — [`app/llm/async_client.py`](../app/llm/async_client.py)
++ endpoint mới [`POST /chat/stream-sse`](../app/api/routes_chat.py):
+
+| | `/chat/stream` (Bài 1) | `/chat/stream-sse` (Bài 4, mới) |
+|---|---|---|
+| Protocol | `text/plain` thô | **SSE** (`text/event-stream`), kết thúc bằng `data: [DONE]` |
+| I/O | SYNC (`def`) — block event loop nếu server có việc khác | **ASYNC** (`async def`) + `AsyncOpenAI` |
+| Client bỏ đi giữa chừng | Vẫn sinh tiếp → đốt tiền API | **`request.is_disconnected()`** → dừng ngay |
+| Quá tải đồng thời | Không giới hạn → 429 hàng loạt từ provider | **Semaphore backpressure** (`LLM_MAX_CONCURRENCY`) — request thừa xếp hàng |
+| Lỗi giữa stream | Vỡ kết nối, client không biết vì sao | Gửi `{"error": ...}` qua SSE rồi đóng sạch |
+
+Giữ **CẢ HAI** endpoint có chủ đích: học viên so sánh trực tiếp 2 cách, và
+`chat.html`/test Module I không phải sửa gì. `async_client.py` tái dùng
+`RotatingKeyPool` của [`app/llm/client.py`](../app/llm/client.py) (không viết
+lại logic key rotation) — chỉ khác `AsyncOpenAI` thay `OpenAI`, và
+`acall_with_retry()` dùng `asyncio.sleep()` thay `time.sleep()` (bản sync,
+`resilience.retry_with_backoff`, sẽ BLOCK event loop nếu gọi từ `async def`).
+
+```bash
+curl -N -X POST http://localhost:8000/chat/stream-sse \
+    -H "Content-Type: application/json" \
+    -d '{"question": "Mức lương tối thiểu vùng I là bao nhiêu?"}'
+```
+
+**Hands-on: đo backpressure (Section 4, Bước 3)** — [`scripts/concurrency_benchmark.py`](../scripts/concurrency_benchmark.py)
+bắn N request đồng thời vào `/chat/stream-sse`, đo p50/p95/throughput:
+
+```bash
+LLM_MAX_CONCURRENCY=5  uvicorn app.main:app --port 8000   # terminal 1
+python -m scripts.concurrency_benchmark --requests 50 --concurrency 50  # terminal 2
+
+# Đổi LLM_MAX_CONCURRENCY=50, chạy lại — so sánh p95/throughput để THẤY
+# hiệu ứng semaphore, không chỉ đọc lý thuyết.
+```
+
+> **Test** (mock `AsyncOpenAI`, không gọi API thật): [`tests/test_async_client.py`](../tests/test_async_client.py)
+> (semaphore nhả/giữ slot, retry+jitter, hết lượt thử thì raise) và
+> [`tests/test_chat.py`](../tests/test_chat.py) (`test_chat_stream_sse_endpoint_wiring`,
+> verify format SSE + `[DONE]`; `test_chat_stream_endpoint_still_works` xác nhận
+> endpoint cũ không bị phá).
+
+### Buổi 5 — Cloud Deployment
+
+Đưa image từ Bài 4 lên **Google Compute Engine** (VM chạy liên tục — Section 1
+so sánh Compute Engine/Cloud Run/GKE/Vertex AI, VM phù hợp nhất cho demo 1
+service tự quản nginx/TLS). Toàn bộ script + runbook ở [`deploy/`](../deploy/README.md).
+
+**Compute + hạ tầng (Section 2-3)** — [`deploy/startup.sh`](../deploy/startup.sh)
+(cloud-init cài Docker/nginx/certbot), [`deploy/llm-app.service`](../deploy/llm-app.service)
+(systemd unit, `Restart=always` tự hồi phục sau crash), [`deploy/nginx.conf`](../deploy/nginx.conf)
+(reverse proxy + HTTPS qua Let's Encrypt).
+
+> **`proxy_buffering off` là bắt buộc cho route streaming.** nginx mặc định
+> buffer toàn bộ response trước khi trả — client không thấy token nào tới cho
+> đến khi model sinh XONG, phá hoàn toàn SSE. `nginx.conf` tắt buffering riêng
+> cho `/chat/stream-sse` VÀ `/chat/stream` (2 route streaming), khớp header
+> `X-Accel-Buffering: no` mà endpoint SSE đã set sẵn (Bài 4, Section 4).
+
+**Secret Management (Section 4)** — [`app/config.py`](../app/config.py)
+đọc `OPENAI_API_KEYS`/`TAVILY_API_KEY`/`LANGSMITH_API_KEY` từ **GCP Secret
+Manager lúc RUNTIME** khi `USE_SECRET_MANAGER=true` (production), fallback
+`.env` khi tắt (local dev/test — mặc định). Auth qua Service Account gắn vào
+VM (Application Default Credentials), **không có key file JSON nào** trên VM
+hay trong image. `get_settings()` gọi `_load_secret_overrides()`: lỗi GCP bất
+kỳ (mất quyền, secret không tồn tại...) chỉ log warning và fallback về `.env`
+của field đó — không sập cả app.
+
+```bash
+python -c "
+from app.config import Settings, _load_secret_overrides
+base = Settings(USE_SECRET_MANAGER=True, GCP_PROJECT_ID='my-project')
+print(_load_secret_overrides(base))  # {} nếu chưa auth GCP local — bài học: an toàn, không raise
+"
+```
+
+**Firewall + IAM (Section 5)** — [`deploy/deploy.sh`](../deploy/deploy.sh)
+chỉ mở `80`/`443` ra Internet; port app (8000) bind `127.0.0.1` trong container
+(`llm-app.service`), không có rule firewall riêng — nginx là điểm vào public
+duy nhất. Service Account chỉ có role `secretmanager.secretAccessor` (least
+privilege).
+
+**Hands-on: deploy full stack (Section 6)** — runbook từng bước đầy đủ ở
+[`deploy/README.md`](../deploy/README.md):
+
+```bash
+export PROJECT_ID=my-gcp-project DOMAIN=chat.example.com
+./deploy/deploy.sh   # firewall -> IAM -> secrets -> build+push -> VM -> nginx -> certbot
+curl https://$DOMAIN/health
+```
+
+> **Test** (mock GCP client, không gọi Secret Manager thật): [`tests/test_secret_manager.py`](../tests/test_secret_manager.py)
+> — verify override đúng field khi bật, no-op khi tắt/thiếu project_id, và lỗi
+> GCP fallback về `.env` thay vì raise.
+
 ---
 
 ## Cấu trúc (Module III)
@@ -213,18 +347,30 @@ app/
 │   ├── scorers.py         #   score_rules, score_judge (bọc app/eval/judge.py)
 │   ├── runner.py          #   run_eval — wraps langsmith.evaluate() + pipeline.answer()
 │   └── gate.py            #   summarize (tổng + by_slice), check_gate, diff_failed_cases
-├── cost/                  # ✓ Module III, Bài 3 — token economics + cache 2 tầng + cascade + budget
+├── cost/                  # ✓ Module III, Bài 3 (+ Bài 4) — token economics + cache 2 tầng + cascade + budget
 │   ├── tracker.py         #   CostTracker (by_feature/by_user/percentile), breakdown_tokens
 │   ├── cache_exact.py     #   ExactCache (tầng 1), CacheStore protocol, InMemoryStore
+│   ├── cache_redis.py     #   ✓ Bài 4 — RedisStore (CacheStore thật, dùng chung nhiều instance)
 │   ├── cascade.py         #   answer_cascade, escalate_rate
 │   └── budget.py          #   check_budget, guard_user_budget, BudgetExceeded (→ HTTP 429)
+├── llm/async_client.py    # ✓ Bài 4, Section 4 — AsyncOpenAI, semaphore backpressure, retry+jitter async
 └── optimization/caching.py # ✓ nâng cấp Bài 3: TTL, is_volatile(), stats() (tầng 2, Module I gốc)
 data/
 ├── eval/legal_qa/v1.yaml       # ✓ Bài 2 — golden set 30 case
 └── cost/replay_questions.yaml  # ✓ Bài 3 — 46 câu replay (~43% trùng/gần giống)
 scripts/
-├── eval_pipeline_demo.py  # ✓ Bài 2 — CLI: sync dataset → evaluate() → report → gate → exit 0/1
-└── cost_replay_demo.py    # ✓ Bài 3 — CLI: replay 4 cấu hình cache → bảng so sánh cost
+├── eval_pipeline_demo.py       # ✓ Bài 2 — CLI: sync dataset → evaluate() → report → gate → exit 0/1
+├── cost_replay_demo.py         # ✓ Bài 3 — CLI: replay 4 cấu hình cache → bảng so sánh cost
+└── concurrency_benchmark.py    # ✓ Bài 4 — CLI: bắn N request đồng thời, đo p50/p95/throughput
+Dockerfile                  # ✓ Bài 4, Section 1 — multi-stage build, non-root, HEALTHCHECK
+.dockerignore                # ✓ Bài 4 — loại .git/tests/training/notebook khỏi build context
+docker-compose.yml            # ✓ Bài 4 — Qdrant + Redis + app + vllm (profile GPU tuỳ chọn)
+deploy/                      # ✓ Module III, Bài 5 — Compute Engine + nginx + systemd + Secret Manager
+├── startup.sh              #   cloud-init: cài Docker/nginx/certbot lần đầu
+├── llm-app.service          #   systemd unit — Restart=always
+├── nginx.conf                #   reverse proxy, proxy_buffering off cho route streaming
+├── deploy.sh                 #   orchestration: firewall → IAM → secrets → build → VM → TLS
+└── README.md                 #   runbook đầy đủ từng bước
 .github/workflows/
 └── eval-gate.yml          # ✓ CI: subset trên PR (chặn merge), full nightly (không chặn)
 ```
